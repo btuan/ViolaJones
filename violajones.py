@@ -2,7 +2,7 @@
 
 
 Author: Brian Tuan
-Last Modified: February 11, 2017
+Last Modified: February 13, 2017
 
 """
 
@@ -217,6 +217,10 @@ def train_features(features, faces, background, faces_dist, background_dist):
 
     features.sort(key=lambda x: x[-1])
     return features
+
+
+def construct_cascade():
+    pass
 
 
 @click.command()
