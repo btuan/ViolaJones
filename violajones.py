@@ -179,36 +179,27 @@ def generate_features(width, height, stride=1, verbose=False):
 
 def train_features(features, faces, background, faces_dist, background_dist):
     """ Train polarity and threshold for each feature on the test set. """
-    indicator = np.concatenate((faces_dist, -1 * background_dist))
+    together = np.concatenate((faces, background))
     for ind, feature in enumerate(features):
         add, sub = feature[0], feature[1]
 
-        # Compute the value of this feature on the entire faces set.
-        face_add = np.array([faces[:, i[0], i[1]] for i in add]).T.sum(axis=-1)
-        face_sub = np.array([faces[:, i[0], i[1]] for i in sub]).T.sum(axis=-1)
-        face_scores = face_add - face_sub
-        face_sort_perm = face_scores.argsort()
-        face_scores, faces_dist = face_scores[face_sort_perm], faces_dist[face_sort_perm]
-
-        # Compute the value of this feature on the entire background set.
-        back_add = np.array([background[:, i[0], i[1]] for i in add]).T.sum(axis=-1)
-        back_sub = np.array([background[:, i[0], i[1]] for i in sub]).T.sum(axis=-1)
-        back_scores = back_add - back_sub
-        back_sort_perm = back_scores.argsort()
-        back_scores, background_dist = back_scores[back_sort_perm], background_dist[back_sort_perm]
+        # TODO: Normalize the indicator
+        indicator = np.concatenate((faces_dist, -1 * background_dist))
+        to_add = together[:, [x[0] for x in add], [y[1] for y in add]].sum(axis=-1)
+        to_sub = together[:, [x[0] for x in sub], [y[1] for y in sub]].sum(axis=-1)
+        scores = to_add - to_sub
+        sort_perm = scores.argsort()
 
         # Calculate optimal polarity and threshold.
         t_face, t_back = faces_dist.sum(), background_dist.sum()
-        together = np.concatenate((face_scores, back_scores))
-        sort_perm = together.argsort()
-        together, indicator_perm = together[sort_perm], indicator[sort_perm]
+        scores, indicator_perm = scores[sort_perm], indicator[sort_perm]
 
         s_face = 0 if indicator_perm[0] < 0 else indicator_perm[0]
         s_back = 0 if indicator_perm[0] >= 0 else indicator_perm[0]
         error_min = min(s_face + t_back - s_back, s_back + t_face - s_face)
         polarity_min = -1 if error_min == s_face + t_back - s_back else 1
         threshold = together[0]
-        for j in range(1, together.shape[0]):
+        for j in range(1, scores.shape[0]):
             if indicator_perm[j] < 0:
                 s_back -= indicator_perm[j]
             else:
@@ -243,10 +234,9 @@ def run(faces, background, test, verbose):
     background = integral_image(import_img_dir(background))
 
     features = generate_features(64, 64, stride=8, verbose=verbose)
-    print(len(features))
 
     if verbose:
-        print("Training features...")
+        print("Training {} features...".format(len(features)))
     faces_dist_init = np.full((faces.shape[0]), 1 / (faces.shape[0] + background.shape[0]))
     background_dist_init = np.full((background.shape[0]), 1 / (faces.shape[0] + background.shape[0]))
     trained_features = train_features(features, faces, background, faces_dist_init, background_dist_init)
