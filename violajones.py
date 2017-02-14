@@ -175,11 +175,11 @@ def generate_features(width, height, stride=1, verbose=False):
 
     if verbose:
         print("Generating type 3 features...")
-    # features.extend(gen_type3(width, height, stride))
+    features.extend(gen_type3(width, height, stride))
 
     if verbose:
         print("Generating type 4 features...\n")
-    # features.extend(gen_type4(width, height, stride))
+    features.extend(gen_type4(width, height, stride))
 
     return features
 
@@ -191,7 +191,7 @@ def eval_feature(feature, data):
     return to_add - to_sub
 
 
-def _train_features(features, together, indicator, faces_dist, background_dist, verbose=False):
+def _train_features(features, together, indicator, t_face, t_back, verbose=False):
     """ Train polarity and threshold for each feature on the test set. """
     for ind, feature in enumerate(features):
         if verbose and ind % 1000 == 0:
@@ -202,7 +202,6 @@ def _train_features(features, together, indicator, faces_dist, background_dist, 
         sort_perm = scores.argsort()
 
         # Calculate optimal polarity and threshold.
-        t_face, t_back = faces_dist.sum(), background_dist.sum()
         scores, indicator_perm = scores[sort_perm], indicator[sort_perm]
 
         s_face = 0 if indicator_perm[0] < 0 else indicator_perm[0]
@@ -210,7 +209,6 @@ def _train_features(features, together, indicator, faces_dist, background_dist, 
         error_min = min(s_face + t_back - s_back, s_back + t_face - s_face)
         polarity_min = +1 if error_min == s_face + t_back - s_back else -1
         threshold = together[0]
-        min_j = 0
         for j in range(1, scores.shape[0]):
             if indicator_perm[j] < 0:
                 s_back -= indicator_perm[j]
@@ -224,7 +222,6 @@ def _train_features(features, together, indicator, faces_dist, background_dist, 
                 error_min = error
                 polarity_min = +1 if left < right else -1
                 threshold = scores[j]
-                min_j = j
 
         features[ind] = tuple((add, sub, polarity_min, threshold, error_min))
 
@@ -235,30 +232,34 @@ def _train_features(features, together, indicator, faces_dist, background_dist, 
 
 
 def train_features(features, faces, background, faces_dist, background_dist, verbose=False):
-    # TODO: Use multiprocessing.dummy here
+    t_face, t_back = faces_dist.sum(), background_dist.sum()
+    norm = t_face + t_back
+    faces_dist /= norm
+    background_dist /= norm
     together = np.concatenate((faces, background))
     indicator = np.concatenate((faces_dist, -1 * background_dist))
 
     args = []
-    num_cpus = cpu_count()
-    chunk = len(features) // num_cpus
+    num_procs = cpu_count() * 3
+    chunk = len(features) // num_procs
     for cpu in range(cpu_count()):
-        if cpu + 1 == num_cpus:
+        if cpu + 1 == num_procs:
             args.append((
-                features[cpu * chunk:], together, indicator, faces_dist, background_dist, False
+                features[cpu * chunk:], together, indicator, t_face, t_back, False
             ))
         else:
             args.append((
-                features[cpu * chunk: (cpu + 1) * chunk], together, indicator, faces_dist,
-                background_dist, False
+                features[cpu * chunk: (cpu + 1) * chunk], together, indicator, t_face,
+                t_back, False
             ))
 
     # args = [(f, together, indicator, faces_dist, background_dist, verbose) for f in features]
-    result = Pool(processes=cpu_count()).starmap_async(_train_features, args).get()
+    result = Pool(processes=num_procs).starmap_async(_train_features, args).get()
     result = [y for x in result for y in x]
     result.sort(key=lambda x: x[-1])
 
     return result
+
 
 def calculate_feature_error(feature, faces, background, faces_dist, background_dist):
     together = np.concatenate((faces, background))
