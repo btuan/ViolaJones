@@ -11,7 +11,7 @@ from multiprocessing import cpu_count, Pool
 import numpy as np
 import json
 
-from util import import_img_dir, import_jpg, integral_image
+from util import import_img_dir, import_jpg, integral_image, draw_bounding_boxes
 
 
 """
@@ -263,14 +263,6 @@ ADABOOST ENSEMBLE FUNCTIONS
 """
 
 
-# def get_ensemble_prediction(classifiers, alphas, threshold, integral_image):
-#     score = 0
-#     for ind, classifier in enumerate(classifiers):
-#         _, _, polarity, theta, _ = classifier
-#         score += alphas[ind] * np.sign(polarity * eval_feature(classifier, V))
-
-
-
 def calculate_ensemble_error(classifiers, alphas, threshold, faces, background):
     face_scores = np.zeros(faces.shape[0])
     background_scores = np.zeros(background.shape[0])
@@ -380,12 +372,18 @@ def construct_classifier_cascade(features, faces, background, verbose=False):
 
 
 def get_cascade_prediction(cascade, integral_images, face_indices, verbose=False):
-    for step in cascade:
+    if verbose:
+        print("Evaluating cascade in {} image patches.".format(integral_images.shape[0]))
+
+    for ind, step in enumerate(cascade):
         classifiers, alphas, _ = step
         _, scores, _, negatives, _ = calculate_ensemble_error(
             classifiers, alphas, 0, integral_images, integral_images
         )
         integral_images, face_indices = integral_images[~negatives], face_indices[~negatives]
+
+        if verbose:
+            print("After {} cascade steps, {} potential faces.".format(ind, integral_images.shape[0]))
 
     return face_indices
 
@@ -412,23 +410,24 @@ def run(faces, background, load, test, verbose):
         with open('cascade_save.json', 'w') as f:
             json.dump(cascade, f)
     else:
+        stride = 4
         with open(load, 'r') as f:
-            cascade = json.load(f)[:1]
+            cascade = json.load(f)
 
         test_image = import_jpg(test)
+        # test_image = integral_image(original_image)
         bounding_boxes = []
         integral_images = []
         indices = []
-        for x in range(0, test_image.shape[0] - 64, 64):
-            for y in range(0, test_image.shape[1] - 64, 64):
+        for x in range(0, test_image.shape[0] - 64, stride):
+            for y in range(0, test_image.shape[1] - 64, stride):
                 bounding_boxes.append((x, y))
                 indices.append(len(indices))
                 integral_images.append(integral_image(test_image[x: x + 64, y: y + 64]))
 
         face_indices = get_cascade_prediction(cascade, np.array(integral_images), np.array(indices), verbose=verbose)
         print(face_indices)
-
-
+        draw_bounding_boxes(test_image, np.array(bounding_boxes)[face_indices], 64, 64)
 
 
 if __name__ == "__main__":
