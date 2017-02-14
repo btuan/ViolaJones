@@ -191,51 +191,13 @@ def eval_feature(feature, data):
     return to_add - to_sub
 
 
-def _train_feature(feature, together, indicator, faces_dist, background_dist, verbose=False):
+def _train_features(features, together, indicator, faces_dist, background_dist, verbose=False):
     """ Train polarity and threshold for each feature on the test set. """
-    add, sub = feature[0], feature[1]
-    scores = eval_feature(feature, together)
-    sort_perm = scores.argsort()
-
-    # Calculate optimal polarity and threshold.
-    t_face, t_back = faces_dist.sum(), background_dist.sum()
-    scores, indicator_perm = scores[sort_perm], indicator[sort_perm]
-
-    s_face = 0 if indicator_perm[0] < 0 else indicator_perm[0]
-    s_back = 0 if indicator_perm[0] >= 0 else indicator_perm[0]
-    error_min = min(s_face + t_back - s_back, s_back + t_face - s_face)
-    polarity_min = +1 if error_min == s_face + t_back - s_back else -1
-    threshold = together[0]
-
-    for j in range(1, scores.shape[0]):
-        if indicator_perm[j] < 0:
-            s_back -= indicator_perm[j]
-        else:
-            s_face += indicator_perm[j]
-
-        left = s_face + t_back - s_back
-        right = s_back + t_face - s_face
-        error = min(left, right)
-        if error < error_min:
-            error_min = error
-            polarity_min = +1 if left < right else -1
-            threshold = scores[j]
-
-    return tuple((add, sub, polarity_min, threshold, error_min))
-
-
-def _train_features(features, faces, background, faces_dist, background_dist, verbose=False):
-    """ Train polarity and threshold for each feature on the test set. """
-    norm = faces_dist.sum() + background_dist.sum()
-    faces_dist /= norm
-    background_dist /= norm
-    together = np.concatenate((faces, background))
     for ind, feature in enumerate(features):
         if verbose and ind % 1000 == 0:
             print('\rTrained {} features...'.format(ind), end='')
         add, sub = feature[0], feature[1]
 
-        indicator = np.concatenate((faces_dist, -1 * background_dist))
         scores = eval_feature(feature, together)
         sort_perm = scores.argsort()
 
@@ -276,9 +238,27 @@ def train_features(features, faces, background, faces_dist, background_dist, ver
     # TODO: Use multiprocessing.dummy here
     together = np.concatenate((faces, background))
     indicator = np.concatenate((faces_dist, -1 * background_dist))
-    args = [(f, together, indicator, faces_dist, background_dist, verbose) for f in features]
-    return sorted(Pool(processes=cpu_count()).starmap(_train_feature, args), key=lambda x: x[-1])
 
+    args = []
+    num_cpus = cpu_count()
+    chunk = len(features) // num_cpus
+    for cpu in range(cpu_count()):
+        if cpu + 1 == num_cpus:
+            args.append((
+                features[cpu * chunk:], together, indicator, faces_dist, background_dist, False
+            ))
+        else:
+            args.append((
+                features[cpu * chunk: (cpu + 1) * chunk], together, indicator, faces_dist,
+                background_dist, False
+            ))
+
+    # args = [(f, together, indicator, faces_dist, background_dist, verbose) for f in features]
+    result = Pool(processes=cpu_count()).starmap_async(_train_features, args).get()
+    result = [y for x in result for y in x]
+    result.sort(key=lambda x: x[-1])
+
+    return result
 
 def calculate_feature_error(feature, faces, background, faces_dist, background_dist):
     together = np.concatenate((faces, background))
