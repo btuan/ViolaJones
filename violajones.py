@@ -154,7 +154,7 @@ def gen_type4(width, height, stride=1, increment=1):
     return features
 
 
-def generate_features(width, height, stride=1, verbose=False):
+def generate_features(width, height, stride=1, increment=1, verbose=False):
     """ Generate features based on integral image representation.
     Each feature is represented by points to add, points to subtract, polarity, and threshold.
     """
@@ -163,19 +163,19 @@ def generate_features(width, height, stride=1, verbose=False):
 
     if verbose:
         print("Generating type 1 features...")
-    features.extend(gen_type1(width, height, stride))
+    features.extend(gen_type1(width, height, stride=stride, increment=increment))
 
     if verbose:
         print("Generating type 2 features...")
-    features.extend(gen_type2(width, height, stride))
+    features.extend(gen_type2(width, height, stride=stride, increment=increment))
 
     if verbose:
         print("Generating type 3 features...")
-    features.extend(gen_type3(width, height, stride))
+    features.extend(gen_type3(width, height, stride=stride, increment=increment))
 
     if verbose:
         print("Generating type 4 features...\n")
-    features.extend(gen_type4(width, height, stride))
+    features.extend(gen_type4(width, height, stride=stride, increment=increment))
 
     return features
 
@@ -207,7 +207,7 @@ def _train_features(features, together, indicator, t_face, t_back, verbose=False
         s_back = 0 if indicator_perm[0] >= 0 else -1 * indicator_perm[0]
         error_min = min(s_face + t_back - s_back, s_back + t_face - s_face)
         polarity_min = +1 if error_min == s_face + t_back - s_back else -1
-        threshold = together[0]
+        threshold = scores[0]
         for j in range(1, scores.shape[0]):
             if indicator_perm[j] < 0:
                 s_back -= indicator_perm[j]
@@ -216,6 +216,14 @@ def _train_features(features, together, indicator, t_face, t_back, verbose=False
 
             left = s_face + t_back - s_back
             right = s_back + t_face - s_face
+            try:
+                assert(left >= 0)
+                assert(right >= 0)
+            except AssertionError as e:
+                print(e)
+                print(t_face, s_face)
+                print(t_back, s_back)
+                print(t_face + t_back, left, right)
 
             error = min(left, right)
             if error < error_min:
@@ -223,7 +231,7 @@ def _train_features(features, together, indicator, t_face, t_back, verbose=False
                 polarity_min = +1 if left < right else -1
                 threshold = scores[j]
 
-        features[ind] = tuple((add, sub, polarity_min, threshold, error_min))
+        features[ind] = tuple((add, sub, polarity_min, threshold, abs(error_min)))
 
     if verbose:
         print('\rFinished training {} features.'.format(len(features)))
@@ -269,6 +277,7 @@ def calculate_ensemble_error(classifiers, alphas, threshold, faces, background):
     for ind, classifier in enumerate(classifiers):
         _, _, polarity, theta, _ = classifier
         face_scores += alphas[ind] * np.sign(polarity * (eval_feature(classifier, faces) - theta))
+
         background_scores += alphas[ind] * np.sign(polarity * (eval_feature(classifier, background) - theta))
 
     face_scores -= threshold
@@ -293,19 +302,25 @@ def construct_boosted_classifier(features, faces, background, threadpool, target
         add, sub, polarity, theta, err = train_features(
             features, faces, background, faces_dist, background_dist, threadpool
         )[0]
-        print('\t', add, sub, polarity, theta, err)
+        if verbose:
+            print("\nSelected", add, sub, polarity, theta, err)
+
         err += eps
         classifiers.append((add, sub, polarity, theta, err))
         alphas.append((1 / 2) * np.log((1 - err) / err))
         zt = 2 * np.sqrt(err * (1 - err))
 
-        for ind in range(faces_dist.shape[0]):
-            ht = np.sign(polarity * (eval_feature((add, sub), faces[ind: ind + 1]) - theta) + eps)
-            faces_dist[ind] = (faces_dist[ind] / zt) * np.exp(-1 * alphas[-1] * ht)
+        ht = np.sign(polarity * (eval_feature((add, sub), faces) - theta) + eps)
+        faces_dist = (faces_dist / zt) * np.exp(-1 * alphas[-1] * ht)
+        # for ind in range(faces_dist.shape[0]):
+        #     ht = np.sign(polarity * (eval_feature((add, sub), faces[ind: ind + 1]) - theta) + eps)
+        #     faces_dist[ind] = (faces_dist[ind] / zt) * np.exp(-1 * alphas[-1] * ht)
 
-        for ind in range(background_dist.shape[0]):
-            ht = np.sign(polarity * (eval_feature((add, sub), faces[ind: ind + 1]) - theta) + eps)
-            background_dist[ind] = (background_dist[ind] / zt) * np.exp(alphas[-1] * ht)
+        ht = np.sign(polarity * (eval_feature((add, sub), background) - theta) + eps)
+        background_dist = (background_dist / zt) * np.exp(+1 * alphas[-1] * ht)
+        # for ind in range(background_dist.shape[0]):
+        #     ht = np.sign(polarity * (eval_feature((add, sub), background[ind: ind + 1]) - theta) + eps)
+        #     background_dist[ind] = (background_dist[ind] / zt) * np.exp(alphas[-1] * ht)
 
         _, face_scores, _, false_negatives, _ = calculate_ensemble_error(classifiers, alphas, 0, faces, background)
         threshold = np.amin(face_scores[false_negatives]) if false_negatives.sum() > 0 else 0
@@ -355,7 +370,7 @@ def construct_classifier_cascade(features, faces, background, verbose=False):
             print("\nBOOSTING ROUND {}".format(len(cascade) + 1))
             print("================")
         classifiers, alphas, threshold, error = construct_boosted_classifier(
-            features, faces, background, pool, target_false_pos_rate=0.35, verbose=verbose
+            features, faces, background, pool, target_false_pos_rate=0.3, verbose=verbose
         )
 
         cascade.append((classifiers, alphas, threshold))
@@ -378,7 +393,7 @@ def get_cascade_prediction(cascade, integral_images, face_indices, verbose=False
     for ind, step in enumerate(cascade):
         classifiers, alphas, _ = step
         _, scores, _, negatives, _ = calculate_ensemble_error(
-            classifiers, alphas, 0, integral_images, integral_images
+            classifiers, alphas, 0, integral_images, integral_images[:1]
         )
         integral_images, face_indices = integral_images[~negatives], face_indices[~negatives]
 
@@ -396,6 +411,8 @@ def get_cascade_prediction(cascade, integral_images, face_indices, verbose=False
 @click.option("-v", "--verbose", default=False, is_flag=True, help="Toggle for verbosity.")
 def run(faces, background, load, test, verbose):
     if load is None:
+        stride = 4
+        increment = 4
         if verbose:
             print("Importing face examples from: {} ...".format(faces))
         faces = integral_image(import_img_dir(faces))
@@ -404,7 +421,7 @@ def run(faces, background, load, test, verbose):
             print("Importing background examples from: {} ...\n".format(background))
         background = integral_image(import_img_dir(background))
 
-        features = generate_features(64, 64, stride=4, verbose=verbose)
+        features = generate_features(64, 64, stride=stride, increment=increment, verbose=verbose)
         cascade = construct_classifier_cascade(features, faces, background, verbose=verbose)
 
         with open('cascade_save.json', 'w') as f:
