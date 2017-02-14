@@ -7,7 +7,7 @@ Last Modified: February 13, 2017
 """
 
 import click
-from multiprocessing import cpu_count
+from multiprocessing import cpu_count, Pool
 import numpy as np
 import _thread
 
@@ -191,6 +191,39 @@ def eval_feature(feature, data):
     return to_add - to_sub
 
 
+def _train_feature(feature, together, indicator, faces_dist, background_dist, verbose=False):
+    """ Train polarity and threshold for each feature on the test set. """
+    add, sub = feature[0], feature[1]
+    scores = eval_feature(feature, together)
+    sort_perm = scores.argsort()
+
+    # Calculate optimal polarity and threshold.
+    t_face, t_back = faces_dist.sum(), background_dist.sum()
+    scores, indicator_perm = scores[sort_perm], indicator[sort_perm]
+
+    s_face = 0 if indicator_perm[0] < 0 else indicator_perm[0]
+    s_back = 0 if indicator_perm[0] >= 0 else indicator_perm[0]
+    error_min = min(s_face + t_back - s_back, s_back + t_face - s_face)
+    polarity_min = +1 if error_min == s_face + t_back - s_back else -1
+    threshold = together[0]
+
+    for j in range(1, scores.shape[0]):
+        if indicator_perm[j] < 0:
+            s_back -= indicator_perm[j]
+        else:
+            s_face += indicator_perm[j]
+
+        left = s_face + t_back - s_back
+        right = s_back + t_face - s_face
+        error = min(left, right)
+        if error < error_min:
+            error_min = error
+            polarity_min = +1 if left < right else -1
+            threshold = scores[j]
+
+    return tuple((add, sub, polarity_min, threshold, error_min))
+
+
 def _train_features(features, faces, background, faces_dist, background_dist, verbose=False):
     """ Train polarity and threshold for each feature on the test set. """
     norm = faces_dist.sum() + background_dist.sum()
@@ -235,15 +268,16 @@ def _train_features(features, faces, background, faces_dist, background_dist, ve
 
     if verbose:
         print('\rFinished training {} features.'.format(len(features)))
-    features.sort(key=lambda x: x[-1])
+    # features.sort(key=lambda x: x[-1])
     return features
 
 
 def train_features(features, faces, background, faces_dist, background_dist, verbose=False):
     # TODO: Use multiprocessing.dummy here
-    trained_features = []
-
-    return _train_features(features, faces, background, faces_dist, background_dist, verbose=verbose)
+    together = np.concatenate((faces, background))
+    indicator = np.concatenate((faces_dist, -1 * background_dist))
+    args = [(f, together, indicator, faces_dist, background_dist, verbose) for f in features]
+    return sorted(Pool(processes=cpu_count()).starmap(_train_feature, args), key=lambda x: x[-1])
 
 
 def calculate_feature_error(feature, faces, background, faces_dist, background_dist):
@@ -288,11 +322,11 @@ def construct_classifier_cascade(features, faces, background, verbose=False):
 def run(faces, background, test, verbose):
     if verbose:
         print("Importing face examples from: {} ...".format(faces))
-    faces = integral_image(import_img_dir(faces))[:200]
+    faces = integral_image(import_img_dir(faces))
 
     if verbose:
         print("Importing background examples from: {} ...\n".format(background))
-    background = integral_image(import_img_dir(background))[:200]
+    background = integral_image(import_img_dir(background))
 
     features = generate_features(64, 64, stride=8, verbose=verbose)
     classifier = construct_classifier_cascade(features, faces, background, verbose=verbose)
