@@ -263,6 +263,14 @@ ADABOOST ENSEMBLE FUNCTIONS
 """
 
 
+# def get_ensemble_prediction(classifiers, alphas, threshold, integral_image):
+#     score = 0
+#     for ind, classifier in enumerate(classifiers):
+#         _, _, polarity, theta, _ = classifier
+#         score += alphas[ind] * np.sign(polarity * eval_feature(classifier, V))
+
+
+
 def calculate_ensemble_error(classifiers, alphas, threshold, faces, background):
     face_scores = np.zeros(faces.shape[0])
     background_scores = np.zeros(background.shape[0])
@@ -277,7 +285,7 @@ def calculate_ensemble_error(classifiers, alphas, threshold, faces, background):
     false_negatives = face_scores < 0
     false_positives = background_scores > 0
 
-    error = (false_negatives.sum() + false_positives.sum()) / (faces.shape[0] + background.shape[0])
+    error = (false_negatives.sum() + false_positives.sum()) / (faces.shape[0] + background.shape[0] + 1e-100)
     return error, face_scores, background_scores, false_negatives, false_positives
 
 
@@ -293,7 +301,7 @@ def construct_boosted_classifier(features, faces, background, threadpool, target
         add, sub, polarity, theta, err = train_features(
             features, faces, background, faces_dist, background_dist, threadpool
         )[0]
-        print(add, sub, polarity, theta, err)
+        print('\t', add, sub, polarity, theta, err)
         err += eps
         classifiers.append((add, sub, polarity, theta, err))
         alphas.append((1 / 2) * np.log((1 - err) / err))
@@ -371,6 +379,17 @@ def construct_classifier_cascade(features, faces, background, verbose=False):
     return cascade
 
 
+def get_cascade_prediction(cascade, integral_images, face_indices, verbose=False):
+    for step in cascade:
+        classifiers, alphas, _ = step
+        _, scores, _, negatives, _ = calculate_ensemble_error(
+            classifiers, alphas, 0, integral_images, integral_images
+        )
+        integral_images, face_indices = integral_images[~negatives], face_indices[~negatives]
+
+    return face_indices
+
+
 @click.command()
 @click.option("-f", "--faces", help="Path to directory containing face examples.", required=True)
 @click.option("-b", "--background", help="Path to directory containing background examples.", required=True)
@@ -394,11 +413,22 @@ def run(faces, background, load, test, verbose):
             json.dump(cascade, f)
     else:
         with open(load, 'r') as f:
-            cascade = json.load(f)
-            print(cascade)
+            cascade = json.load(f)[:1]
 
-    # if test:
-    #     print(import_jpg(test).shape)
+        test_image = import_jpg(test)
+        bounding_boxes = []
+        integral_images = []
+        indices = []
+        for x in range(0, test_image.shape[0] - 64, 64):
+            for y in range(0, test_image.shape[1] - 64, 64):
+                bounding_boxes.append((x, y))
+                indices.append(len(indices))
+                integral_images.append(integral_image(test_image[x: x + 64, y: y + 64]))
+
+        face_indices = get_cascade_prediction(cascade, np.array(integral_images), np.array(indices), verbose=verbose)
+        print(face_indices)
+
+
 
 
 if __name__ == "__main__":
