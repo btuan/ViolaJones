@@ -9,13 +9,9 @@ Last Modified: February 13, 2017
 import click
 from multiprocessing import cpu_count, Pool
 import numpy as np
-import _thread
+import json
 
-# from adaboost import construct_boosted_classifier
 from util import import_img_dir, import_jpg, integral_image
-
-from pprint import PrettyPrinter as P
-p = P(indent=4)
 
 
 """
@@ -183,6 +179,11 @@ def generate_features(width, height, stride=1, verbose=False):
 
     return features
 
+"""
+FEATURE EVALUATION AND PROCESSING FUNCTIONS
+===========================================
+"""
+
 
 def eval_feature(feature, data):
     add, sub = feature[0], feature[1]
@@ -200,12 +201,10 @@ def _train_features(features, together, indicator, t_face, t_back, verbose=False
 
         scores = eval_feature(feature, together)
         sort_perm = scores.argsort()
-
-        # Calculate optimal polarity and threshold.
         scores, indicator_perm = scores[sort_perm], indicator[sort_perm]
 
         s_face = 0 if indicator_perm[0] < 0 else indicator_perm[0]
-        s_back = 0 if indicator_perm[0] >= 0 else indicator_perm[0]
+        s_back = 0 if indicator_perm[0] >= 0 else -1 * indicator_perm[0]
         error_min = min(s_face + t_back - s_back, s_back + t_face - s_face)
         polarity_min = +1 if error_min == s_face + t_back - s_back else -1
         threshold = together[0]
@@ -217,6 +216,7 @@ def _train_features(features, together, indicator, t_face, t_back, verbose=False
 
             left = s_face + t_back - s_back
             right = s_back + t_face - s_face
+
             error = min(left, right)
             if error < error_min:
                 error_min = error
@@ -232,10 +232,10 @@ def _train_features(features, together, indicator, t_face, t_back, verbose=False
 
 
 def train_features(features, faces, background, faces_dist, background_dist, threadpool, verbose=False):
-    t_face, t_back = faces_dist.sum(), background_dist.sum()
-    norm = t_face + t_back
+    norm = faces_dist.sum() + background_dist.sum()
     faces_dist /= norm
     background_dist /= norm
+    t_face, t_back = faces_dist.sum(), background_dist.sum()
     together = np.concatenate((faces, background))
     indicator = np.concatenate((faces_dist, -1 * background_dist))
 
@@ -253,11 +253,14 @@ def train_features(features, faces, background, faces_dist, background_dist, thr
                 t_back, False
             ))
 
-    result = threadpool.starmap_async(_train_features, args).get()
-    result = [y for x in result for y in x]
+    result = [y for x in threadpool.starmap_async(_train_features, args).get() for y in x]
     result.sort(key=lambda x: x[-1])
-
     return result
+
+
+"""
+ADABOOST ENSEMBLE FUNCTIONS
+"""
 
 
 def calculate_ensemble_error(classifiers, alphas, threshold, faces, background):
@@ -290,7 +293,6 @@ def construct_boosted_classifier(features, faces, background, threadpool, target
         add, sub, polarity, theta, err = train_features(
             features, faces, background, faces_dist, background_dist, threadpool
         )[0]
-        print(err)
         classifiers.append((add, sub, polarity, theta, err))
         alphas.append((1 / 2) * np.log((1 - err) / err))
         zt = 2 * np.sqrt(err * (1 - err))
@@ -310,17 +312,18 @@ def construct_boosted_classifier(features, faces, background, threadpool, target
         false_positive_rate = false_positives.sum() / background.shape[0]
 
         if verbose:
-            print("Boosted classifier has {} features with false positive rate: {}.".format(
-                len(classifiers), false_positive_rate)
+            print("Boosted classifier has {} features with false positive rate {:0.5f} and error {:0.5f}.".format(
+                len(classifiers), false_positive_rate, error)
             )
         if false_positive_rate < target_false_pos_rate:
-            # if verbose:
-            #     print("\rBoosted classifier has {} features with false positive rate: {}.".format(
-            #         len(classifiers), false_positive_rate)
-            #     )
             break
 
     return classifiers, alphas, threshold, error
+
+
+"""
+CASCADE FUNCTIONS
+"""
 
 
 def evaluate_cascade_error(cascade, faces, background, verbose=False):
@@ -350,7 +353,7 @@ def construct_classifier_cascade(features, faces, background, verbose=False):
             print("\nBOOSTING ROUND {}".format(len(cascade) + 1))
             print("================")
         classifiers, alphas, threshold, error = construct_boosted_classifier(
-            features, faces, background, pool, target_false_pos_rate=0.3, verbose=verbose
+            features, faces, background, pool, target_false_pos_rate=0.35, verbose=verbose
         )
 
         cascade.append((classifiers, alphas, threshold))
@@ -366,34 +369,34 @@ def construct_classifier_cascade(features, faces, background, verbose=False):
     return cascade
 
 
-
 @click.command()
 @click.option("-f", "--faces", help="Path to directory containing face examples.", required=True)
 @click.option("-b", "--background", help="Path to directory containing background examples.", required=True)
+@click.option("-l", "--load", help="Load saved cascade configuration.", default=None)
 @click.option("-t", "--test", help="Test image.", default=None)
 @click.option("-v", "--verbose", default=False, is_flag=True, help="Toggle for verbosity.")
-def run(faces, background, test, verbose):
-    if verbose:
-        print("Importing face examples from: {} ...".format(faces))
-    faces = integral_image(import_img_dir(faces))[:500]
+def run(faces, background, load, test, verbose):
+    if load is None:
+        if verbose:
+            print("Importing face examples from: {} ...".format(faces))
+        faces = integral_image(import_img_dir(faces))[:1000]
 
-    if verbose:
-        print("Importing background examples from: {} ...\n".format(background))
-    background = integral_image(import_img_dir(background))[:500]
+        if verbose:
+            print("Importing background examples from: {} ...\n".format(background))
+        background = integral_image(import_img_dir(background))[:1000]
 
-    features = generate_features(64, 64, stride=8, verbose=verbose)
-    construct_classifier_cascade(features, faces, background, verbose=verbose)
+        features = generate_features(64, 64, stride=6, verbose=verbose)
+        cascade = construct_classifier_cascade(features, faces, background, verbose=verbose)
 
-    # p.pprint(trained_features[:10])
-
-    # p.pprint([i for i in trained_features if i[-3] == 1][:10])
+        with open('cascade_save.json', 'w') as f:
+            json.dump(cascade, f)
+    else:
+        with open(load, 'r') as f:
+            cascade = json.load(f)
+            print(cascade)
 
     # if test:
     #     print(import_jpg(test).shape)
-
-
-
-
 
 
 if __name__ == "__main__":
