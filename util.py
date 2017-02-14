@@ -23,12 +23,12 @@ def rgb_to_grayscale(img):
 
 def import_img_dir(dirname, rgb2gray=True):
     dirname = dirname if '/' in dirname else dirname + '/'
-    imgs = [import_jpg(dirname + f) for f in listdir(dirname) if f.endswith('.jpg')]
+    images = [import_jpg(dirname + f) for f in listdir(dirname) if f.endswith('.jpg')]
 
     if rgb2gray:
-        imgs = [rgb_to_grayscale(i) for i in imgs]
+        images = [rgb_to_grayscale(i) for i in images]
 
-    return np.array(imgs) * 255
+    return np.array(images) * 255
 
 
 def integral_image(arr):
