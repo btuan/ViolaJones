@@ -11,7 +11,7 @@ from multiprocessing import cpu_count, Pool
 import numpy as np
 import _thread
 
-from adaboost import construct_boosted_classifier
+# from adaboost import construct_boosted_classifier
 from util import import_img_dir, import_jpg, integral_image
 
 from pprint import PrettyPrinter as P
@@ -227,11 +227,11 @@ def _train_features(features, together, indicator, t_face, t_back, verbose=False
 
     if verbose:
         print('\rFinished training {} features.'.format(len(features)))
-    # features.sort(key=lambda x: x[-1])
+
     return features
 
 
-def train_features(features, faces, background, faces_dist, background_dist, verbose=False):
+def train_features(features, faces, background, faces_dist, background_dist, threadpool, verbose=False):
     t_face, t_back = faces_dist.sum(), background_dist.sum()
     norm = t_face + t_back
     faces_dist /= norm
@@ -239,11 +239,11 @@ def train_features(features, faces, background, faces_dist, background_dist, ver
     together = np.concatenate((faces, background))
     indicator = np.concatenate((faces_dist, -1 * background_dist))
 
+    NUM_PROCS = cpu_count() * 3
     args = []
-    num_procs = cpu_count() * 3
-    chunk = len(features) // num_procs
+    chunk = len(features) // NUM_PROCS
     for cpu in range(cpu_count()):
-        if cpu + 1 == num_procs:
+        if cpu + 1 == NUM_PROCS:
             args.append((
                 features[cpu * chunk:], together, indicator, t_face, t_back, False
             ))
@@ -253,46 +253,118 @@ def train_features(features, faces, background, faces_dist, background_dist, ver
                 t_back, False
             ))
 
-    # args = [(f, together, indicator, faces_dist, background_dist, verbose) for f in features]
-    result = Pool(processes=num_procs).starmap_async(_train_features, args).get()
+    result = threadpool.starmap_async(_train_features, args).get()
     result = [y for x in result for y in x]
     result.sort(key=lambda x: x[-1])
 
     return result
 
 
-def calculate_feature_error(feature, faces, background, faces_dist, background_dist):
-    together = np.concatenate((faces, background))
-    indicator = np.concatenate((faces_dist, background_dist))
+def calculate_ensemble_error(classifiers, alphas, threshold, faces, background):
+    face_scores = np.zeros(faces.shape[0])
+    background_scores = np.zeros(background.shape[0])
+    for ind, classifier in enumerate(classifiers):
+        _, _, polarity, theta, _ = classifier
+        face_scores += alphas[ind] * np.sign(polarity * (eval_feature(classifier, faces) - theta))
+        background_scores += alphas[ind] * np.sign(polarity * (eval_feature(classifier, background) - theta))
 
-    polarity, threshold = feature[2], feature[3]
-    indicator = np.concatenate((faces_dist, -1 * background_dist))
-    scores = eval_feature(feature, together)
+    face_scores -= threshold
+    background_scores -= threshold
 
-    identified_faces = polarity * (scores - threshold) >= 0
-    identified_background = polarity * (scores - threshold) < 0
+    false_negatives = face_scores < 0
+    false_positives = background_scores > 0
 
-    true_faces = indicator >= 0
-    true_background = indicator < 0
+    error = (false_negatives.sum() + false_positives.sum()) / (faces.shape[0] + background.shape[0])
+    return error, face_scores, background_scores, false_negatives, false_positives
 
-    false_positives = indicator[identified_faces ^ true_faces]
-    false_negatives = indicator[identified_background ^ true_background]
 
-    return false_positives.sum() + false_negatives.sum()
+def construct_boosted_classifier(features, faces, background, threadpool, target_false_pos_rate=0.3, verbose=False):
+    eps = 1E-100
+    classifiers, alphas = [], []
+
+    faces_dist = np.full((faces.shape[0]), 1 / (faces.shape[0] + background.shape[0]))
+    background_dist = np.full((background.shape[0]), 1 / (faces.shape[0] + background.shape[0]))
+
+    while True:
+        # Take classifier with minimum error on the distribution.
+        add, sub, polarity, theta, err = train_features(
+            features, faces, background, faces_dist, background_dist, threadpool
+        )[0]
+        print(err)
+        classifiers.append((add, sub, polarity, theta, err))
+        alphas.append((1 / 2) * np.log((1 - err) / err))
+        zt = 2 * np.sqrt(err * (1 - err))
+
+        for ind in range(faces_dist.shape[0]):
+            ht = np.sign(polarity * (eval_feature((add, sub), faces[ind: ind + 1]) - theta) + eps)
+            faces_dist[ind] = (faces_dist[ind] / zt) * np.exp(-1 * alphas[-1] * ht)
+
+        for ind in range(background_dist.shape[0]):
+            ht = np.sign(polarity * (eval_feature((add, sub), faces[ind: ind + 1]) - theta) + eps)
+            background_dist[ind] = (background_dist[ind] / zt) * np.exp(alphas[-1] * ht)
+
+        _, face_scores, _, false_negatives, _ = calculate_ensemble_error(classifiers, alphas, 0, faces, background)
+        threshold = np.amin(face_scores[false_negatives]) if false_negatives.sum() > 0 else 0
+
+        error, _, _, _, false_positives = calculate_ensemble_error(classifiers, alphas, threshold, faces, background)
+        false_positive_rate = false_positives.sum() / background.shape[0]
+
+        if verbose:
+            print("Boosted classifier has {} features with false positive rate: {}.".format(
+                len(classifiers), false_positive_rate)
+            )
+        if false_positive_rate < target_false_pos_rate:
+            # if verbose:
+            #     print("\rBoosted classifier has {} features with false positive rate: {}.".format(
+            #         len(classifiers), false_positive_rate)
+            #     )
+            break
+
+    return classifiers, alphas, threshold, error
+
+
+def evaluate_cascade_error(cascade, faces, background, verbose=False):
+    for step in cascade:
+        classifiers, alphas, threshold = step
+
+        error, _, _, false_negatives, false_positives = calculate_ensemble_error(
+            classifiers, alphas, threshold, faces, background
+        )
+
+        faces = faces[~false_negatives]
+        background = background[false_positives]
+
+    return faces, background
 
 
 def construct_classifier_cascade(features, faces, background, verbose=False):
     if verbose:
         print("Training {} features...".format(len(features)))
-    faces_dist_init = np.full((faces.shape[0]), 1 / (faces.shape[0] + background.shape[0]))
-    background_dist_init = np.full((background.shape[0]), 1 / (faces.shape[0] + background.shape[0]))
-    trained_features = train_features(features, faces, background, faces_dist_init, background_dist_init, verbose=verbose)
 
-    p.pprint(trained_features[:10])
+    NUM_PROCS = cpu_count() * 3
+    pool = Pool(processes=NUM_PROCS)
+    cascade = []
+    num_initial_background = background.shape[0]
+    while True:
+        if verbose:
+            print("\nBOOSTING ROUND {}".format(len(cascade) + 1))
+            print("================")
+        classifiers, alphas, threshold, error = construct_boosted_classifier(
+            features, faces, background, pool, target_false_pos_rate=0.3, verbose=verbose
+        )
 
-    # TODO: normalize the indicator
+        cascade.append((classifiers, alphas, threshold))
+        faces, background = evaluate_cascade_error(cascade, faces, background, verbose=verbose)
+        if verbose:
+            print("Boosting concluded with {} classifiers and remaining background proportion: {:0.5f}".format(
+                len(classifiers), background.shape[0] / num_initial_background
+            ))
+            print("================")
+        if background.shape[0] / num_initial_background < 0.01:
+            break
 
-    return trained_features
+    return cascade
+
 
 
 @click.command()
@@ -303,14 +375,14 @@ def construct_classifier_cascade(features, faces, background, verbose=False):
 def run(faces, background, test, verbose):
     if verbose:
         print("Importing face examples from: {} ...".format(faces))
-    faces = integral_image(import_img_dir(faces))
+    faces = integral_image(import_img_dir(faces))[:500]
 
     if verbose:
         print("Importing background examples from: {} ...\n".format(background))
-    background = integral_image(import_img_dir(background))
+    background = integral_image(import_img_dir(background))[:500]
 
     features = generate_features(64, 64, stride=8, verbose=verbose)
-    classifier = construct_classifier_cascade(features, faces, background, verbose=verbose)
+    construct_classifier_cascade(features, faces, background, verbose=verbose)
 
     # p.pprint(trained_features[:10])
 
