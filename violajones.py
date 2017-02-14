@@ -293,6 +293,8 @@ def construct_boosted_classifier(features, faces, background, threadpool, target
         add, sub, polarity, theta, err = train_features(
             features, faces, background, faces_dist, background_dist, threadpool
         )[0]
+        print(add, sub, polarity, theta, err)
+        err += eps
         classifiers.append((add, sub, polarity, theta, err))
         alphas.append((1 / 2) * np.log((1 - err) / err))
         zt = 2 * np.sqrt(err * (1 - err))
@@ -379,13 +381,13 @@ def run(faces, background, load, test, verbose):
     if load is None:
         if verbose:
             print("Importing face examples from: {} ...".format(faces))
-        faces = integral_image(import_img_dir(faces))[:1000]
+        faces = integral_image(import_img_dir(faces))
 
         if verbose:
             print("Importing background examples from: {} ...\n".format(background))
-        background = integral_image(import_img_dir(background))[:1000]
+        background = integral_image(import_img_dir(background))
 
-        features = generate_features(64, 64, stride=6, verbose=verbose)
+        features = generate_features(64, 64, stride=4, verbose=verbose)
         cascade = construct_classifier_cascade(features, faces, background, verbose=verbose)
 
         with open('cascade_save.json', 'w') as f:
