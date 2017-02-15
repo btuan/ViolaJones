@@ -231,7 +231,7 @@ def _train_features(features, together, indicator, t_face, t_back, verbose=False
                 polarity_min = +1 if left < right else -1
                 threshold = scores[j]
 
-        features[ind] = tuple((add, sub, polarity_min, float(threshold), abs(error_min)))
+        features[ind] = tuple((add, sub, polarity_min, threshold, abs(error_min)))
 
     if verbose:
         print('\rFinished training {} features.'.format(len(features)))
@@ -312,9 +312,11 @@ def construct_boosted_classifier(features, faces, background, threadpool, target
 
         ht = np.sign(polarity * (eval_feature((add, sub), faces) - theta) + eps)
         faces_dist = (faces_dist / zt) * np.exp(-1 * alphas[-1] * ht)
+        # faces_dist *= (err / (1 - err)) ** (1 * (ht >= 0))
 
         ht = np.sign(polarity * (eval_feature((add, sub), background) - theta) + eps)
         background_dist = (background_dist / zt) * np.exp(+1 * alphas[-1] * ht)
+        # background_dist *= (err / (1 - err)) ** (1 * (ht < 0))
 
         _, face_scores, _, false_negatives, _ = calculate_ensemble_error(classifiers, alphas, 0, faces, background)
         threshold = np.amin(face_scores[false_negatives]) if false_negatives.sum() > 0 else 0
@@ -364,7 +366,7 @@ def construct_classifier_cascade(features, faces, background, verbose=False):
             print("\nBOOSTING ROUND {}".format(len(cascade) + 1))
             print("================")
         classifiers, alphas, threshold, error = construct_boosted_classifier(
-            features, faces, background, pool, target_false_pos_rate=0.5, verbose=verbose
+            features, faces, background, pool, target_false_pos_rate=0.3, verbose=verbose
         )
 
         cascade.append((classifiers, alphas, threshold))
@@ -374,7 +376,7 @@ def construct_classifier_cascade(features, faces, background, verbose=False):
                 len(classifiers), background.shape[0] / num_initial_background
             ))
             print("================")
-        if background.shape[0] / num_initial_background < 0.005:
+        if background.shape[0] / num_initial_background < 0.01:
             break
 
     return cascade
@@ -385,12 +387,14 @@ def get_cascade_prediction(cascade, integral_images, face_indices, verbose=False
         print("Evaluating cascade in {} image patches.".format(integral_images.shape[0]))
 
     for ind, step in enumerate(cascade):
-        classifiers, alphas, _ = step
+        classifiers, alphas, theta = step
         threshold = sum(alphas)
         _, scores, _, negatives, _ = calculate_ensemble_error(
+            classifiers, alphas, +0.37 * threshold, integral_images, integral_images[:1]
+            # classifiers, alphas, +0.375 * threshold, integral_images, integral_images[:1]
             # classifiers, alphas, +0.4627 * threshold, integral_images, integral_images[:1]
-            classifiers, alphas, +0.35 * threshold, integral_images, integral_images[:1]
-            # classifiers, alphas, 0, integral_images, integral_images[:1]
+            # classifiers, alphas, +0.35 * threshold, integral_images, integral_images[:1] # For stringent
+            # classifiers, alphas, 0, integral_images, integral_images[:1] # Default case
         )
         integral_images, face_indices = integral_images[~negatives], face_indices[~negatives]
 
