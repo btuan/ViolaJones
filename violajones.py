@@ -290,14 +290,15 @@ def calculate_ensemble_error(classifiers, alphas, threshold, faces, background):
     return error, face_scores, background_scores, false_negatives, false_positives
 
 
-def construct_boosted_classifier(features, faces, background, threadpool, target_false_pos_rate=0.3, verbose=False):
+def construct_boosted_classifier(features, faces, background, threadpool, rounds=5, verbose=False):
     eps = 1E-100
     classifiers, alphas = [], []
 
     faces_dist = np.full((faces.shape[0]), 1 / (faces.shape[0] + background.shape[0]))
     background_dist = np.full((background.shape[0]), 1 / (faces.shape[0] + background.shape[0]))
 
-    while True:
+    # while True:
+    for _ in range(rounds):
         # Take classifier with minimum error on the distribution.
         add, sub, polarity, theta, err = train_features(
             features, faces, background, faces_dist, background_dist, threadpool
@@ -328,8 +329,8 @@ def construct_boosted_classifier(features, faces, background, threadpool, target
             print("Boosted classifier has {} features with false positive rate {:0.5f} and error {:0.5f}.".format(
                 len(classifiers), false_positive_rate, error)
             )
-        if false_positive_rate < target_false_pos_rate:
-            break
+        # if false_positive_rate < target_false_pos_rate:
+        #     break
 
     return classifiers, alphas, threshold, error
 
@@ -361,12 +362,14 @@ def construct_classifier_cascade(features, faces, background, verbose=False):
     pool = Pool(processes=NUM_PROCS)
     cascade = []
     num_initial_background = background.shape[0]
-    while True:
+
+    # while True:
+    for i in range(1, 16):
         if verbose:
             print("\nBOOSTING ROUND {}".format(len(cascade) + 1))
             print("================")
         classifiers, alphas, threshold, error = construct_boosted_classifier(
-            features, faces, background, pool, target_false_pos_rate=0.3, verbose=verbose
+            features, faces, background, pool, rounds=(i * 5), verbose=verbose
         )
 
         cascade.append((classifiers, alphas, threshold))
@@ -376,8 +379,8 @@ def construct_classifier_cascade(features, faces, background, verbose=False):
                 len(classifiers), background.shape[0] / num_initial_background
             ))
             print("================")
-        if background.shape[0] / num_initial_background < 0.01:
-            break
+        # if background.shape[0] / num_initial_background < 0.01:
+        #     break
 
     return cascade
 
