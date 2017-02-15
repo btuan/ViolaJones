@@ -28,7 +28,7 @@ def import_img_dir(dirname, rgb2gray=True):
     if rgb2gray:
         images = [rgb_to_grayscale(i) for i in images]
 
-    return np.array(images) * 255
+    return (np.array(images) * 255).astype(np.uint8)
 
 
 def integral_image(arr):
