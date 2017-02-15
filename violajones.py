@@ -231,7 +231,7 @@ def _train_features(features, together, indicator, t_face, t_back, verbose=False
                 polarity_min = +1 if left < right else -1
                 threshold = scores[j]
 
-        features[ind] = tuple((add, sub, polarity_min, threshold, abs(error_min)))
+        features[ind] = tuple((add, sub, polarity_min, float(threshold), abs(error_min)))
 
     if verbose:
         print('\rFinished training {} features.'.format(len(features)))
@@ -312,15 +312,9 @@ def construct_boosted_classifier(features, faces, background, threadpool, target
 
         ht = np.sign(polarity * (eval_feature((add, sub), faces) - theta) + eps)
         faces_dist = (faces_dist / zt) * np.exp(-1 * alphas[-1] * ht)
-        # for ind in range(faces_dist.shape[0]):
-        #     ht = np.sign(polarity * (eval_feature((add, sub), faces[ind: ind + 1]) - theta) + eps)
-        #     faces_dist[ind] = (faces_dist[ind] / zt) * np.exp(-1 * alphas[-1] * ht)
 
         ht = np.sign(polarity * (eval_feature((add, sub), background) - theta) + eps)
         background_dist = (background_dist / zt) * np.exp(+1 * alphas[-1] * ht)
-        # for ind in range(background_dist.shape[0]):
-        #     ht = np.sign(polarity * (eval_feature((add, sub), background[ind: ind + 1]) - theta) + eps)
-        #     background_dist[ind] = (background_dist[ind] / zt) * np.exp(alphas[-1] * ht)
 
         _, face_scores, _, false_negatives, _ = calculate_ensemble_error(classifiers, alphas, 0, faces, background)
         threshold = np.amin(face_scores[false_negatives]) if false_negatives.sum() > 0 else 0
@@ -370,7 +364,7 @@ def construct_classifier_cascade(features, faces, background, verbose=False):
             print("\nBOOSTING ROUND {}".format(len(cascade) + 1))
             print("================")
         classifiers, alphas, threshold, error = construct_boosted_classifier(
-            features, faces, background, pool, target_false_pos_rate=0.3, verbose=verbose
+            features, faces, background, pool, target_false_pos_rate=0.5, verbose=verbose
         )
 
         cascade.append((classifiers, alphas, threshold))
@@ -380,7 +374,7 @@ def construct_classifier_cascade(features, faces, background, verbose=False):
                 len(classifiers), background.shape[0] / num_initial_background
             ))
             print("================")
-        if background.shape[0] / num_initial_background < 0.01:
+        if background.shape[0] / num_initial_background < 0.005:
             break
 
     return cascade
@@ -392,13 +386,16 @@ def get_cascade_prediction(cascade, integral_images, face_indices, verbose=False
 
     for ind, step in enumerate(cascade):
         classifiers, alphas, _ = step
+        threshold = sum(alphas)
         _, scores, _, negatives, _ = calculate_ensemble_error(
-            classifiers, alphas, 0, integral_images, integral_images[:1]
+            # classifiers, alphas, +0.4627 * threshold, integral_images, integral_images[:1]
+            classifiers, alphas, +0.35 * threshold, integral_images, integral_images[:1]
+            # classifiers, alphas, 0, integral_images, integral_images[:1]
         )
         integral_images, face_indices = integral_images[~negatives], face_indices[~negatives]
 
         if verbose:
-            print("After {} cascade steps, {} potential faces.".format(ind, integral_images.shape[0]))
+            print("After {} cascade steps, {} potential faces.".format(ind + 1, integral_images.shape[0]))
 
     return face_indices
 
@@ -411,7 +408,7 @@ def get_cascade_prediction(cascade, integral_images, face_indices, verbose=False
 @click.option("-v", "--verbose", default=False, is_flag=True, help="Toggle for verbosity.")
 def run(faces, background, load, test, verbose):
     if load is None:
-        stride = 4
+        stride = 2
         increment = 4
         if verbose:
             print("Importing face examples from: {} ...".format(faces))
@@ -427,24 +424,27 @@ def run(faces, background, load, test, verbose):
         with open('cascade_save.json', 'w') as f:
             json.dump(cascade, f)
     else:
-        stride = 4
+        stride = 3
         with open(load, 'r') as f:
             cascade = json.load(f)
 
-        test_image = import_jpg(test)
+        original_image = import_jpg(test)
         # test_image = integral_image(original_image)
         bounding_boxes = []
+        # integrated_image = np.empty_like(original_image)
         integral_images = []
         indices = []
-        for x in range(0, test_image.shape[0] - 64, stride):
-            for y in range(0, test_image.shape[1] - 64, stride):
+        for x in range(0, original_image.shape[0] - 64, stride):
+            for y in range(0, original_image.shape[1] - 64, stride):
                 bounding_boxes.append((x, y))
                 indices.append(len(indices))
-                integral_images.append(integral_image(test_image[x: x + 64, y: y + 64]))
+                # integrated_image[x: x + 64, y: y + 64] = original_image[x: x + 64, y: y + 64]
+                integral_images.append(integral_image(original_image[x: x + 64, y: y + 64]))
+                # integral_images.append(test_image[x: x + 64, y: y + 64])
+                # integral_images.append(integrated_image[x: x + 64, y: y + 64])
 
         face_indices = get_cascade_prediction(cascade, np.array(integral_images), np.array(indices), verbose=verbose)
-        print(face_indices)
-        draw_bounding_boxes(test_image, np.array(bounding_boxes)[face_indices], 64, 64)
+        draw_bounding_boxes(original_image, np.array(bounding_boxes)[face_indices], 64, 64)
 
 
 if __name__ == "__main__":
