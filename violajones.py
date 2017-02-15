@@ -364,6 +364,7 @@ def construct_classifier_cascade(features, faces, background, verbose=False):
 
     # while True:
     for _ in range(10):
+        pre_boost_background = background.shape[0]
         if verbose:
             print("\nBOOSTING ROUND {}".format(len(cascade) + 1))
             print("================")
@@ -375,7 +376,7 @@ def construct_classifier_cascade(features, faces, background, verbose=False):
         faces, background = evaluate_cascade_error(cascade, faces, background, verbose=verbose)
         if verbose:
             print("Boosting concluded with {} classifiers and remaining background proportion: {:0.5f}".format(
-                len(classifiers), background.shape[0] / num_initial_background
+                len(classifiers), background.shape[0] / pre_boost_background
             ))
             print("================")
         # if background.shape[0] / num_initial_background < 0.01:
