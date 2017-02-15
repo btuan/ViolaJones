@@ -18,7 +18,7 @@ def import_jpg(fname):
 
 
 def rgb_to_grayscale(img):
-    return color.rgb2gray(img)
+    return np.rint(color.rgb2gray(img) * 255)
 
 
 def import_img_dir(dirname, rgb2gray=True):
@@ -28,7 +28,7 @@ def import_img_dir(dirname, rgb2gray=True):
     if rgb2gray:
         images = [rgb_to_grayscale(i) for i in images]
 
-    return (np.array(images) * 255).astype(np.uint8)
+    return np.array(images)
 
 
 def integral_image(arr):
@@ -37,6 +37,9 @@ def integral_image(arr):
 
 
 def draw_bounding_boxes(arr, bounding_boxes, w, h, fpath=None):
+    # TODO: Merge intersecting bounding boxes
+
+
     for x1, y1 in bounding_boxes:
         x2, y2 = x1 + w, y1 + h
         arr[x1: x2, y1] = np.full(w, 255, dtype=np.int64)
