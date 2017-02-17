@@ -216,15 +216,6 @@ def _train_features(features, together, indicator, t_face, t_back, verbose=False
 
             left = s_face + t_back - s_back
             right = s_back + t_face - s_face
-            try:
-                assert(left >= 0)
-                assert(right >= 0)
-            except AssertionError as e:
-                print(e)
-                print(t_face, s_face)
-                print(t_back, s_back)
-                print(t_face + t_back, left, right)
-
             error = min(left, right)
             if error < error_min:
                 error_min = error
@@ -311,16 +302,11 @@ def construct_boosted_classifier(features, faces, background, threadpool, target
 
         ht = np.sign(polarity * (eval_feature((add, sub), faces) - theta) + eps)
         faces_dist = (faces_dist / zt) * np.exp(-1 * alphas[-1] * ht)
-        # faces_dist *= (err / (1 - err)) ** (1 * (ht >= 0))
 
         ht = np.sign(polarity * (eval_feature((add, sub), background) - theta) + eps)
         background_dist = (background_dist / zt) * np.exp(+1 * alphas[-1] * ht)
-        # background_dist *= (err / (1 - err)) ** (1 * (ht < 0))
 
-        # _, face_scores, _, false_negatives, _ = calculate_ensemble_error(classifiers, alphas, 0, faces, background)
-        # threshold = np.amin(face_scores[false_negatives]) if false_negatives.sum() > 0 else 0
         # Calculate threshold
-        # TODO: double check that this is correct
         face_scores = np.zeros(faces.shape[0])
         for ind, classifier in enumerate(classifiers):
             _, _, polarity, theta, _ = classifier
@@ -368,8 +354,7 @@ def construct_classifier_cascade(features, faces, background, verbose=False):
     cascade = []
     num_initial_background = background.shape[0]
 
-    # while True:
-    for _ in range(10):
+    while True:
         if verbose:
             print("\nBOOSTING ROUND {}".format(len(cascade) + 1))
             print("================")
@@ -384,8 +369,8 @@ def construct_classifier_cascade(features, faces, background, verbose=False):
                 len(classifiers), background.shape[0] / num_initial_background
             ))
             print("================")
-        # if background.shape[0] / num_initial_background < 0.01:
-        #     break
+        if background.shape[0] / num_initial_background < 0.01:
+            break
 
     return cascade
 
@@ -399,10 +384,6 @@ def get_cascade_prediction(cascade, integral_images, face_indices, verbose=False
         threshold = sum(alphas)
         _, scores, _, negatives, _ = calculate_ensemble_error(
             classifiers, alphas, +0.25 * threshold, integral_image(integral_images), integral_images[:1]
-            # classifiers, alphas, +0.375 * threshold, integral_images, integral_images[:1]
-            # classifiers, alphas, +0.4627 * threshold, integral_images, integral_images[:1]
-            # classifiers, alphas, +0.35 * threshold, integral_images, integral_images[:1] # For stringent
-            # classifiers, alphas, 0, integral_images, integral_images[:1] # Default case
         )
         integral_images, face_indices = integral_images[~negatives], face_indices[~negatives]
 
@@ -441,9 +422,7 @@ def run(faces, background, load, test, verbose):
             cascade = json.load(f)
 
         original_image = import_jpg(test)
-        # test_image = integral_image(original_image)
         bounding_boxes = []
-        # integrated_image = np.empty_like(original_image)
         integral_images = []
         indices = []
         for x in range(0, original_image.shape[0] - 64, stride):
@@ -451,7 +430,6 @@ def run(faces, background, load, test, verbose):
                 bounding_boxes.append((x, y))
                 indices.append(len(indices))
                 integral_images.append(original_image[x: x + 64, y: y + 64])
-                # integral_images.append(integral_image(original_image[x: x + 64, y: y + 64]))
 
         face_indices = get_cascade_prediction(cascade, np.array(integral_images), np.array(indices), verbose=verbose)
         draw_bounding_boxes(original_image, np.array(bounding_boxes)[face_indices], 64, 64)
