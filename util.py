@@ -49,33 +49,43 @@ def boxes_intersect(bbox1, bbox2):
     return abs(x1 - x2) * 2 < w1 + w2 and abs(y1 - y2) * 2 < h1 + h2
 
 
-def draw_bounding_boxes(arr, bounding_boxes, w, h, fpath=None):
-    # TODO: Merge intersecting bounding boxes
+def draw_bounding_boxes(arr, bounding_boxes, w, h, merge_intersections=False, fpath=None):
     boxes_to_draw = []
 
-    for x1, y1 in bounding_boxes:
-        intersecting_box = None
-        for ind, (x2, y2, w2, h2) in enumerate(boxes_to_draw):
-            if boxes_intersect((x1, y1, w, h), (x2, y2, w2, h2)):
-                intersecting_box = ind
-                break
+    if merge_intersections:
+        # TODO: make this a weighted average
+        for x1, y1 in bounding_boxes:
+            intersecting_box = None
+            for ind, (x2, y2, w2, h2) in enumerate(boxes_to_draw):
+                if boxes_intersect((x1, y1, w, h), (x2, y2, w2, h2)):
+                    intersecting_box = ind
+                    break
 
-        if intersecting_box is None:
-            boxes_to_draw.append((x1, y1, w, h))
-        else:
-            x2, y2, w2, h2 = boxes_to_draw[intersecting_box]
-            x_lo = min(x1, x2)
-            y_lo = min(y1, y2)
-            new_width = max(x1 + w, x2 + w2) - x_lo
-            new_height = max(y1 + h, y2 + h2) - y_lo
-            boxes_to_draw[intersecting_box] = (x_lo, y_lo, new_width, new_height)
+            if intersecting_box is None:
+                boxes_to_draw.append((x1, y1, w, h))
+            else:
+                x2, y2, w2, h2 = boxes_to_draw[intersecting_box]
+                x_lo = min(x1, x2)
+                y_lo = min(y1, y2)
+                new_width = max(x1 + w, x2 + w2) - x_lo
+                new_height = max(y1 + h, y2 + h2) - y_lo
+                boxes_to_draw[intersecting_box] = (x_lo, y_lo, new_width, new_height)
 
-    for x1, y1, w1, h1 in boxes_to_draw:
-        x2, y2 = x1 + w1, y1 + h1
-        arr[x1: x2, y1] = np.full(w1, 255, dtype=np.int64)
-        arr[x1: x2, y2 - 1] = np.full(w1, 255, dtype=np.int64)
-        arr[x1, y1: y2] = np.full(h1, 255, dtype=np.int64)
-        arr[x2 - 1, y1: y2] = np.full(h1, 255, dtype=np.int64)
+        for x1, y1, w1, h1 in boxes_to_draw:
+            x2, y2 = x1 + w1, y1 + h1
+            arr[x1: x2, y1] = np.full(w1, 255, dtype=np.int64)
+            arr[x1: x2, y2 - 1] = np.full(w1, 255, dtype=np.int64)
+            arr[x1, y1: y2] = np.full(h1, 255, dtype=np.int64)
+            arr[x2 - 1, y1: y2] = np.full(h1, 255, dtype=np.int64)
 
-    io.imsave('image.jpg', arr)
+        io.imsave('image.jpg', arr)
+    else:
+        for x1, y1 in bounding_boxes:
+            x2, y2 = x1 + w, y1 + h
+            arr[x1: x2, y1] = np.full(w, 255, dtype=np.int64)
+            arr[x1: x2, y2 - 1] = np.full(w, 255, dtype=np.int64)
+            arr[x1, y1: y2] = np.full(h, 255, dtype=np.int64)
+            arr[x2 - 1, y1: y2] = np.full(h, 255, dtype=np.int64)
+
+        io.imsave('image.jpg', arr)
 
