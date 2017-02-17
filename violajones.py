@@ -331,9 +331,9 @@ def construct_boosted_classifier(features, faces, background, threadpool, target
         false_positive_rate = false_positives.sum() / background.shape[0]
 
         if verbose:
-            print("Boosted classifier has {} features with false positive rate {:0.5f} and error {:0.5f}.".format(
-                len(classifiers), false_positive_rate, error)
-            )
+            print("Boosted classifier has {} features with ensemble false positive rate {:0.5f} and error {:0.5f}.".
+                  format(len(classifiers), false_positive_rate, error)
+                  )
         if false_positive_rate < target_false_pos_rate:
             break
 
