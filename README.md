@@ -2,6 +2,8 @@
 
 ## Usage:
 ```
+$ pip3 install -r requirements.txt
+
 $ python3 violajones.py --help
 Usage: violajones.py [OPTIONS]
 
