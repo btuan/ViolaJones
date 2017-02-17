@@ -277,14 +277,13 @@ def calculate_ensemble_error(classifiers, alphas, threshold, faces, background):
     for ind, classifier in enumerate(classifiers):
         _, _, polarity, theta, _ = classifier
         face_scores += alphas[ind] * np.sign(polarity * (eval_feature(classifier, faces) - theta))
-
         background_scores += alphas[ind] * np.sign(polarity * (eval_feature(classifier, background) - theta))
 
     face_scores -= threshold
     background_scores -= threshold
 
     false_negatives = face_scores < 0
-    false_positives = background_scores > 0
+    false_positives = background_scores >= 0
 
     error = (false_negatives.sum() + false_positives.sum()) / (faces.shape[0] + background.shape[0] + 1e-100)
     return error, face_scores, background_scores, false_negatives, false_positives
@@ -318,8 +317,15 @@ def construct_boosted_classifier(features, faces, background, threadpool, target
         background_dist = (background_dist / zt) * np.exp(+1 * alphas[-1] * ht)
         # background_dist *= (err / (1 - err)) ** (1 * (ht < 0))
 
-        _, face_scores, _, false_negatives, _ = calculate_ensemble_error(classifiers, alphas, 0, faces, background)
-        threshold = np.amin(face_scores[false_negatives]) if false_negatives.sum() > 0 else 0
+        # _, face_scores, _, false_negatives, _ = calculate_ensemble_error(classifiers, alphas, 0, faces, background)
+        # threshold = np.amin(face_scores[false_negatives]) if false_negatives.sum() > 0 else 0
+        # Calculate threshold
+        # TODO: double check that this is correct
+        face_scores = np.zeros(faces.shape[0])
+        for ind, classifier in enumerate(classifiers):
+            _, _, polarity, theta, _ = classifier
+            face_scores += alphas[ind] * np.sign(polarity * (eval_feature(classifier, faces) - theta))
+        threshold = np.amin(face_scores)
 
         error, _, _, _, false_positives = calculate_ensemble_error(classifiers, alphas, threshold, faces, background)
         false_positive_rate = false_positives.sum() / background.shape[0]
@@ -364,7 +370,6 @@ def construct_classifier_cascade(features, faces, background, verbose=False):
 
     # while True:
     for _ in range(10):
-        pre_boost_background = background.shape[0]
         if verbose:
             print("\nBOOSTING ROUND {}".format(len(cascade) + 1))
             print("================")
@@ -376,7 +381,7 @@ def construct_classifier_cascade(features, faces, background, verbose=False):
         faces, background = evaluate_cascade_error(cascade, faces, background, verbose=verbose)
         if verbose:
             print("Boosting concluded with {} classifiers and remaining background proportion: {:0.5f}".format(
-                len(classifiers), background.shape[0] / pre_boost_background
+                len(classifiers), background.shape[0] / num_initial_background
             ))
             print("================")
         # if background.shape[0] / num_initial_background < 0.01:
@@ -393,7 +398,7 @@ def get_cascade_prediction(cascade, integral_images, face_indices, verbose=False
         classifiers, alphas, theta = step
         threshold = sum(alphas)
         _, scores, _, negatives, _ = calculate_ensemble_error(
-            classifiers, alphas, +0.37 * threshold, integral_images, integral_images[:1]
+            classifiers, alphas, +0.25 * threshold, integral_image(integral_images), integral_images[:1]
             # classifiers, alphas, +0.375 * threshold, integral_images, integral_images[:1]
             # classifiers, alphas, +0.4627 * threshold, integral_images, integral_images[:1]
             # classifiers, alphas, +0.35 * threshold, integral_images, integral_images[:1] # For stringent
@@ -445,10 +450,8 @@ def run(faces, background, load, test, verbose):
             for y in range(0, original_image.shape[1] - 64, stride):
                 bounding_boxes.append((x, y))
                 indices.append(len(indices))
-                # integrated_image[x: x + 64, y: y + 64] = original_image[x: x + 64, y: y + 64]
-                integral_images.append(integral_image(original_image[x: x + 64, y: y + 64]))
-                # integral_images.append(test_image[x: x + 64, y: y + 64])
-                # integral_images.append(integrated_image[x: x + 64, y: y + 64])
+                integral_images.append(original_image[x: x + 64, y: y + 64])
+                # integral_images.append(integral_image(original_image[x: x + 64, y: y + 64]))
 
         face_indices = get_cascade_prediction(cascade, np.array(integral_images), np.array(indices), verbose=verbose)
         draw_bounding_boxes(original_image, np.array(bounding_boxes)[face_indices], 64, 64)
